@@ -29,7 +29,7 @@ type ApiResponse struct {
 var cfg Config
 
 func main() {
-	yamlFile, _ := os.ReadFile("domains.yaml")
+	yamlFile, _ := os.ReadFile("mapping.yaml")
 	_ = yaml.Unmarshal(yamlFile, &cfg)
 
 	http.HandleFunc("/", handler)
