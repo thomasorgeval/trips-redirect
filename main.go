@@ -1,20 +1,30 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"time"
 )
 
 const API_URL = "https://api.polarsteps.com"
 
 type Config struct {
-	Domains map[string]string `yaml:"domains"`
+	Domains   map[string]string            `yaml:"domains"`
+	Analytics map[string]AnalyticsConfig   `yaml:"analytics"`
+}
+
+type AnalyticsConfig struct {
+	GATrackingID string `yaml:"ga_tracking_id"`
+	Enabled      bool   `yaml:"enabled"`
 }
 
 type Trip struct {
@@ -73,7 +83,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("🌍 Request from host=%s → username=%s", host, username)
-
 	// Récupérer les voyages de l'utilisateur
 	trips, err := fetchUserTrips(username)
 	if err != nil {
@@ -120,9 +129,6 @@ func fetchUserTrips(username string) ([]Trip, error) {
 	if err := decoder.Decode(&rawResponse); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON: %w", err)
 	}
-
-	// Log de la structure de réponse pour le débogage
-	log.Printf("🔍 API response keys for %s: %v", username, getKeys(rawResponse))
 
 	// Convertir en JSON puis décoder avec notre structure
 	jsonData, err := json.Marshal(rawResponse)
