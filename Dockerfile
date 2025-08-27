@@ -5,9 +5,10 @@ RUN go mod download
 COPY . .
 RUN go build -o redirector .
  
-FROM scratch
+FROM alpine:3.18
+RUN apk add --no-cache ca-certificates
 WORKDIR /
 COPY --from=builder /app/redirector /redirector
-COPY mapping.yaml /mapping.yaml
+COPY domains.yaml /domains.yaml
 EXPOSE 3000
 CMD ["/redirector"]
