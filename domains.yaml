@@ -1,3 +1,8 @@
 domains:
-  trip.thomasorgeval.com: thomasorgeval
-  whereisanthony.com: anthonylegrand
+  trip.thomasorgeval.com:
+    username: thomasorgeval
+    ga:
+      measurement_id: "G-Z6854XFJ56"
+      secret_key: "your-secret-key"
+  whereisanthony.com: 
+    username: anthonylegrand
