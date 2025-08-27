@@ -55,6 +55,11 @@ func main() {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
+    if r.URL.Path == "/favicon.ico" {
+        http.NotFound(w, r)
+        return
+    }
+	
 	host := r.Header.Get("X-Forwarded-Host")
 	if host == "" {
 		host = r.Host
