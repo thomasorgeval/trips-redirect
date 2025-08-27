@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -15,18 +13,8 @@ import (
 
 const API_URL = "https://api.polarsteps.com"
 
-type DomainConfig struct {
-	Username string `yaml:"username"`
-	GAConfig *GAConfig `yaml:"ga,omitempty"`
-}
-
-type GAConfig struct {
-	MeasurementID string `yaml:"measurement_id"`
-	SecretKey     string `yaml:"secret_key"`
-}
-
 type Config struct {
-	Domains map[string]DomainConfig `yaml:"domains"`
+	Domains map[string]string `yaml:"domains"`
 }
 
 type Trip struct {
@@ -55,9 +43,6 @@ func main() {
 		log.Fatal("❌ Cannot parse domains.yaml:", err)
 	}
 
-	// Charger les configurations GA depuis les variables d'environnement
-	loadGAConfigFromEnv()
-
 	http.HandleFunc("/", handler)
 	
 	port := os.Getenv("PORT")
@@ -67,56 +52,6 @@ func main() {
 	
 	log.Printf("🚀 Redirector running on :%s\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
-}
-
-// Charge les configurations GA depuis les variables d'environnement
-func loadGAConfigFromEnv() {
-	for host, domainConfig := range cfg.Domains {
-		// Normaliser le nom de l'host pour les variables d'environnement
-		envPrefix := normalizeHostForEnv(host)
-		
-		measurementID := os.Getenv(envPrefix + "_GA_MEASUREMENT_ID")
-		secretKey := os.Getenv(envPrefix + "_GA_SECRET_KEY")
-		
-		// Si les variables d'env sont absentes, utiliser le YAML
-		if measurementID == "" && domainConfig.GAConfig != nil {
-			measurementID = domainConfig.GAConfig.MeasurementID
-			secretKey = domainConfig.GAConfig.SecretKey
-		}
-		
-		if measurementID != "" && secretKey != "" {
-			if domainConfig.GAConfig == nil {
-				domainConfig.GAConfig = &GAConfig{}
-			}
-			domainConfig.GAConfig.MeasurementID = measurementID
-			domainConfig.GAConfig.SecretKey = secretKey
-			
-			// Mettre à jour la configuration
-			cfg.Domains[host] = domainConfig
-			
-			log.Printf("✅ GA configuration loaded for %s (ID: %s)", host, measurementID)
-		} else {
-			log.Printf("⚠️ No GA configuration found for %s", host)
-		}
-	}
-}
-
-// Normalise un nom d'host pour les variables d'environnement
-// Exemple: whereisanthony.com -> WHEREISANTHONY_COM
-func normalizeHostForEnv(host string) string {
-	normalized := ""
-	for _, char := range host {
-		if char >= 'a' && char <= 'z' {
-			normalized += string(char - 32) // Convertir en majuscule
-		} else if char >= 'A' && char <= 'Z' {
-			normalized += string(char)
-		} else if char >= '0' && char <= '9' {
-			normalized += string(char)
-		} else {
-			normalized += "_"
-		}
-	}
-	return normalized
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -130,128 +65,40 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		host = host[4:]
 	}
 
-	domainConfig, ok := cfg.Domains[host]
+	username, ok := cfg.Domains[host]
 	if !ok {
 		log.Printf("❌ Unknown host: %s", host)
 		http.NotFound(w, r)
 		return
 	}
 
-	username := domainConfig.Username
 	log.Printf("🌍 Request from host=%s → username=%s", host, username)
-		
-	trips, err := fetchUserTrips(username)
-	userIP := getUserIP(r)
 
+	// Récupérer les voyages de l'utilisateur
+	trips, err := fetchUserTrips(username)
 	if err != nil {
-    	log.Printf("⚠️ Failed to fetch trips for %s from IP %s: %v", username, userIP, err)
-    	if domainConfig.GAConfig != nil {
-        	sendGAEvent(domainConfig.GAConfig, "error", map[string]interface{}{
-            	"error_type": "api_fetch_failed",
-            	"username":   username,
-            	"ip":         userIP,
-        	})
-    	}
-    	http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
-    	return
+		log.Printf("⚠️ Failed to fetch trips for %s: %v", username, err)
+		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
+		return
 	}
 
 	if len(trips) == 0 {
-    	log.Printf("↩️ No trips found for %s from IP %s → redirect to profile", username, userIP)
-    	if domainConfig.GAConfig != nil {
-       		sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
-           	 "redirect_type": "no_trips",
-           	 "username":      username,
-            	"destination":   "profile",
-            	"ip":            userIP,
-        	})
-        	sendGAPageView(domainConfig.GAConfig, username, nil, userIP)
-    	}
-    	http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
-    	return
+		log.Printf("↩️ No trips found for %s → redirect to profile", username)
+		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
+		return
 	}
 
+	// Sélectionner le voyage approprié
 	selectedTrip := selectTrip(trips)
 	if selectedTrip == nil {
-    	log.Printf("↩️ No suitable trip found for %s from IP %s → redirect to profile", username, userIP)
-    	if domainConfig.GAConfig != nil {
-       	 	sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
-           	 "redirect_type": "no_suitable_trip",
-            	"username":      username,
-            	"destination":   "profile",
-            	"ip":            userIP,
-        	})
-        	sendGAPageView(domainConfig.GAConfig, username, nil, userIP)
-    	}
-    	http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
-    	return
+		log.Printf("↩️ No suitable trip found for %s → redirect to profile", username)
+		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
+		return
 	}
 
 	target := fmt.Sprintf("https://polarsteps.com/%s/%d-%s", username, selectedTrip.ID, selectedTrip.Slug)
-	log.Printf("➡️ Redirecting %s from IP %s → %s", username, userIP, target)
-
-	if domainConfig.GAConfig != nil {
-    	sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
-       		"redirect_type": "trip",
-        	"username":      username,
-       	 	"trip_id":       selectedTrip.ID,
-        	"trip_slug":     selectedTrip.Slug,
-        	"destination":   "trip",
-        	"ip":            userIP,
-    	})
-    	sendGAPageView(domainConfig.GAConfig, username, selectedTrip, userIP)
-	}
-	
+	log.Printf("➡️ Redirecting %s → %s", username, target)
 	http.Redirect(w, r, target, http.StatusFound)
-}
-
-// Envoie un événement à Google Analytics 4
-func sendGAEvent(gaConfig *GAConfig, eventName string, parameters map[string]interface{}) {
-	if gaConfig == nil || gaConfig.MeasurementID == "" || gaConfig.SecretKey == "" {
-		return
-	}
-	
-	// Construire le payload pour GA4 Measurement Protocol
-	payload := map[string]interface{}{
-		"client_id": generateClientID(),
-		"events": []map[string]interface{}{
-			{
-				"name":       eventName,
-				"params":     parameters,
-			},
-		},
-	}
-	
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("⚠️ Failed to marshal GA payload: %v", err)
-		return
-	}
-	
-	// URL de l'API GA4 Measurement Protocol
-	url := fmt.Sprintf("https://www.google-analytics.com/mp/collect?measurement_id=%s&api_secret=%s", 
-		gaConfig.MeasurementID, gaConfig.SecretKey)
-	
-	// Envoyer la requête en arrière-plan
-	go func() {
-		resp, err := http.Post(url, "application/json", bytes.NewBuffer(payloadJSON))
-		if err != nil {
-			log.Printf("⚠️ Failed to send GA event: %v", err)
-			return
-		}
-		defer resp.Body.Close()
-		
-		if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-			log.Printf("⚠️ GA API returned status: %d", resp.StatusCode)
-		} else {
-			log.Printf("📊 GA event sent: %s", eventName)
-		}
-	}()
-}
-
-// Génère un client_id simple pour GA
-func generateClientID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
 func fetchUserTrips(username string) ([]Trip, error) {
@@ -273,6 +120,9 @@ func fetchUserTrips(username string) ([]Trip, error) {
 	if err := decoder.Decode(&rawResponse); err != nil {
 		return nil, fmt.Errorf("failed to decode JSON: %w", err)
 	}
+
+	// Log de la structure de réponse pour le débogage
+	log.Printf("🔍 API response keys for %s: %v", username, getKeys(rawResponse))
 
 	// Convertir en JSON puis décoder avec notre structure
 	jsonData, err := json.Marshal(rawResponse)
@@ -353,26 +203,4 @@ func getKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
-}
-
-// helper pour récupérer l'IP de l'utilisateur
-func getUserIP(r *http.Request) string {
-    ip, _, err := net.SplitHostPort(r.RemoteAddr)
-    if err != nil {
-        return r.RemoteAddr
-    }
-    return ip
-}
-
-// helper pour envoyer un event GA "page_view"
-func sendGAPageView(gaConfig *GAConfig, username string, trip *Trip, ip string) {
-    data := map[string]interface{}{
-        "username": username,
-        "ip":       ip,
-    }
-    if trip != nil {
-        data["trip_id"] = trip.ID
-        data["trip_slug"] = trip.Slug
-    }
-    sendGAEvent(gaConfig, "page_view", data)
 }
