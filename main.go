@@ -1,17 +1,13 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -83,6 +79,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("🌍 Request from host=%s → username=%s", host, username)
+
 	// Récupérer les voyages de l'utilisateur
 	trips, err := fetchUserTrips(username)
 	if err != nil {
