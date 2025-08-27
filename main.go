@@ -14,13 +14,7 @@ import (
 const API_URL = "https://api.polarsteps.com"
 
 type Config struct {
-	Domains   map[string]string            `yaml:"domains"`
-	Analytics map[string]AnalyticsConfig   `yaml:"analytics"`
-}
-
-type AnalyticsConfig struct {
-	GATrackingID string `yaml:"ga_tracking_id"`
-	Enabled      bool   `yaml:"enabled"`
+	Domains map[string]string `yaml:"domains"`
 }
 
 type Trip struct {
