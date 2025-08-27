@@ -55,7 +55,22 @@ func main() {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-    if r.URL.Path == "/favicon.ico" {
+    // Ignorer les requêtes “techniques” automatiques
+    ignoredPaths := map[string]bool{
+        "/favicon.ico": true,
+        "/robots.txt":  true,
+        "/health":      true, // si tu veux ajouter un endpoint de healthcheck
+    }
+
+    if ignoredPaths[r.URL.Path] {
+        http.NotFound(w, r)
+        return
+    }
+
+    // Filtrer les requêtes qui ne viennent pas d'un vrai navigateur
+    userAgent := r.Header.Get("User-Agent")
+    if userAgent == "" {
+        // Request “sauvage”, probablement un bot ou un service interne
         http.NotFound(w, r)
         return
     }
