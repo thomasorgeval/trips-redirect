@@ -138,64 +138,67 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	username := domainConfig.Username
 	log.Printf("🌍 Request from host=%s → username=%s", host, username)
-
-	// Récupérer les voyages de l'utilisateur
+		
 	trips, err := fetchUserTrips(username)
+	userIP := getUserIP(r)
+
 	if err != nil {
-		log.Printf("⚠️ Failed to fetch trips for %s: %v", username, err)
-		// Envoyer un événement GA d'erreur si configuré
-		if domainConfig.GAConfig != nil {
-			sendGAEvent(domainConfig.GAConfig, "error", map[string]interface{}{
-				"error_type": "api_fetch_failed",
-				"username":   username,
-			})
-		}
-		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
-		return
+    	log.Printf("⚠️ Failed to fetch trips for %s from IP %s: %v", username, userIP, err)
+    	if domainConfig.GAConfig != nil {
+        	sendGAEvent(domainConfig.GAConfig, "error", map[string]interface{}{
+            	"error_type": "api_fetch_failed",
+            	"username":   username,
+            	"ip":         userIP,
+        	})
+    	}
+    	http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
+    	return
 	}
 
 	if len(trips) == 0 {
-		log.Printf("↩️ No trips found for %s → redirect to profile", username)
-		// Envoyer un événement GA si configuré
-		if domainConfig.GAConfig != nil {
-			sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
-				"redirect_type": "no_trips",
-				"username":      username,
-				"destination":   "profile",
-			})
-		}
-		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
-		return
+    	log.Printf("↩️ No trips found for %s from IP %s → redirect to profile", username, userIP)
+    	if domainConfig.GAConfig != nil {
+       		sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
+           	 "redirect_type": "no_trips",
+           	 "username":      username,
+            	"destination":   "profile",
+            	"ip":            userIP,
+        	})
+        	sendGAPageView(domainConfig.GAConfig, username, nil, userIP)
+    	}
+    	http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
+    	return
 	}
 
-	// Sélectionner le voyage approprié
 	selectedTrip := selectTrip(trips)
 	if selectedTrip == nil {
-		log.Printf("↩️ No suitable trip found for %s → redirect to profile", username)
-		// Envoyer un événement GA si configuré
-		if domainConfig.GAConfig != nil {
-			sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
-				"redirect_type": "no_suitable_trip",
-				"username":      username,
-				"destination":   "profile",
-			})
-		}
-		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
-		return
+    	log.Printf("↩️ No suitable trip found for %s from IP %s → redirect to profile", username, userIP)
+    	if domainConfig.GAConfig != nil {
+       	 	sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
+           	 "redirect_type": "no_suitable_trip",
+            	"username":      username,
+            	"destination":   "profile",
+            	"ip":            userIP,
+        	})
+        	sendGAPageView(domainConfig.GAConfig, username, nil, userIP)
+    	}
+    	http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
+    	return
 	}
 
 	target := fmt.Sprintf("https://polarsteps.com/%s/%d-%s", username, selectedTrip.ID, selectedTrip.Slug)
-	log.Printf("➡️ Redirecting %s → %s", username, target)
-	
-	// Envoyer un événement GA de redirection réussie si configuré
+	log.Printf("➡️ Redirecting %s from IP %s → %s", username, userIP, target)
+
 	if domainConfig.GAConfig != nil {
-		sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
-			"redirect_type": "trip",
-			"username":      username,
-			"trip_id":       selectedTrip.ID,
-			"trip_slug":     selectedTrip.Slug,
-			"destination":   "trip",
-		})
+    	sendGAEvent(domainConfig.GAConfig, "redirect", map[string]interface{}{
+       		"redirect_type": "trip",
+        	"username":      username,
+       	 	"trip_id":       selectedTrip.ID,
+        	"trip_slug":     selectedTrip.Slug,
+        	"destination":   "trip",
+        	"ip":            userIP,
+    	})
+    	sendGAPageView(domainConfig.GAConfig, username, selectedTrip, userIP)
 	}
 	
 	http.Redirect(w, r, target, http.StatusFound)
@@ -349,4 +352,26 @@ func getKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// helper pour récupérer l'IP de l'utilisateur
+func getUserIP(r *http.Request) string {
+    ip, _, err := net.SplitHostPort(r.RemoteAddr)
+    if err != nil {
+        return r.RemoteAddr
+    }
+    return ip
+}
+
+// helper pour envoyer un event GA "page_view"
+func sendGAPageView(gaConfig *GAConfig, username string, trip *Trip, ip string) {
+    data := map[string]interface{}{
+        "username": username,
+        "ip":       ip,
+    }
+    if trip != nil {
+        data["trip_id"] = trip.ID
+        data["trip_slug"] = trip.Slug
+    }
+    sendGAEvent(gaConfig, "page_view", data)
 }
