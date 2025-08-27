@@ -52,6 +52,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
     	host = host[4:]
 	}
 
+	log.Printf("host=%s, domains=%v", host, cfg.Domains)
 	username, ok := cfg.Domains[host]
 	if !ok {
 		log.Printf("❌ Unknown host: %s", host)
