@@ -58,3 +58,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trigger Dokploy Deployment
+        run: |
+          curl -X 'POST' \
+          'https://lab.thomasorgeval.com/api/trpc/application.deploy' \
+          -H 'accept: application/json' \
+          -H 'x-api-key: ${{ secrets.DOKPLOY_TOKEN }}' \
+          -H 'Content-Type: application/json' \
+          -d '{
+              "json":{
+                  "applicationId": "${{ vars.DOKPLOY_APPLICATION_ID }}"
+              }
+          }'

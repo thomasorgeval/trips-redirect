@@ -44,6 +44,9 @@ func main() {
 func handler(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	username, ok := cfg.Domains[host]
+	for name, values := range r.Header {
+    	log.Printf("Header %s: %v", name, values)
+	}
 	if !ok {
 		log.Printf("❌ Unknown host: %s", host)
 		http.NotFound(w, r)
