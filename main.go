@@ -42,11 +42,17 @@ func main() {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
-	username, ok := cfg.Domains[host]
-	for name, values := range r.Header {
-    	log.Printf("Header %s: %v", name, values)
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+    	host = r.Host
 	}
+
+	// Supprimer le préfixe www. si présent
+	if len(host) > 4 && host[:4] == "www." {
+    	host = host[4:]
+	}
+
+	username, ok := cfg.Domains[host]
 	if !ok {
 		log.Printf("❌ Unknown host: %s", host)
 		http.NotFound(w, r)
