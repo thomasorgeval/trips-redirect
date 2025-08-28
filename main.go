@@ -8,10 +8,16 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"sync"
 	"time"
 )
 
 const API_URL = "https://api.polarsteps.com"
+
+var cache = struct {
+	sync.RWMutex
+	store map[string]string
+}{store: make(map[string]string)}
 
 type Config struct {
 	Domains map[string]string `yaml:"domains"`
@@ -42,6 +48,8 @@ func main() {
 	if err := yaml.Unmarshal(yamlFile, &cfg); err != nil {
 		log.Fatal("❌ Cannot parse domains.yaml:", err)
 	}
+
+	go startCacheResetter()
 
 	http.HandleFunc("/", handler)
 	
@@ -74,6 +82,18 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("🌍 Request from host=%s → username=%s", host, username)
 
+	cache.RLock()
+	cachedURL, found := cache.store[host]
+	cache.RUnlock()
+
+	if found {
+		log.Printf("✅ Cache hit for %s → %s", host, cachedURL)
+		http.Redirect(w, r, cachedURL, http.StatusFound)
+		return
+	}
+
+	log.Printf("❌ Cache miss for %s", host)
+
 	// Récupérer les voyages de l'utilisateur
 	trips, err := fetchUserTrips(username)
 	if err != nil {
@@ -97,6 +117,11 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := fmt.Sprintf("https://polarsteps.com/%s/%d-%s", username, selectedTrip.ID, selectedTrip.Slug)
+
+	cache.Lock()
+	cache.store[host] = target
+	cache.Unlock()
+
 	log.Printf("➡️ Redirecting %s → %s", username, target)
 	http.Redirect(w, r, target, http.StatusFound)
 }
@@ -200,4 +225,23 @@ func getKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func startCacheResetter() {
+	log.Println("🕒 Daily cache reset scheduled.")
+	go func() {
+		for {
+			now := time.Now()
+			nextMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(24 * time.Hour)
+			durationUntilMidnight := nextMidnight.Sub(now)
+
+			time.Sleep(durationUntilMidnight)
+
+			cache.Lock()
+			cache.store = make(map[string]string)
+			cache.Unlock()
+			log.Println("✅ Cache has been reset at midnight.")
+			time.Sleep(60 * time.Second)
+		}
+	}()
 }
