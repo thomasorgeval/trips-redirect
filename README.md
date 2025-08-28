@@ -1,6 +1,6 @@
 # Trips Redirect
 
-![Docker Image Size](https://img.shields.io/badge/Docker%20Image-8.78%20MB-blue)
+![Docker Image Size](https://img.shields.io/badge/Docker%20Image-11.5%20MB-blue)
 ![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)
 
 A simple and intelligent redirector for your Polarsteps trips. This service allows you to use a custom domain to automatically redirect to your latest Polarsteps trip.
