@@ -51,8 +51,13 @@ var cfg Config
 var db *sql.DB
 
 func main() {
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "stats.db"
+	}
+
 	var err error
-	db, err = initDB("stats.db")
+	db, err = initDB(dbPath)
 	if err != nil {
 		log.Fatal("❌ Cannot initialize database:", err)
 	}
@@ -106,6 +111,11 @@ func initDB(filepath string) (*sql.DB, error) {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
 	host := r.Header.Get("X-Forwarded-Host")
 	if host == "" {
 		host = r.Host

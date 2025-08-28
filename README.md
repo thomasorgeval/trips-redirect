@@ -46,6 +46,24 @@ The service will automatically handle `www.` subdomains. For example, if you con
 
     This will start the service on port 3000.
 
+### Data Persistence
+
+The visit statistics are stored in a SQLite database file. To ensure that your statistics are not lost when you update or restart the Docker container, you should store the database file on your host machine using a Docker volume.
+
+You can specify the path for the database file inside the container by using the `DB_PATH` environment variable.
+
+Here is an example of how to run the service with a persistent database stored in `/path/to/data/stats.db` on your host machine:
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  -v $(pwd)/domains.yaml:/domains.yaml \
+  -v /path/to/data:/data \
+  -e DB_PATH="/data/stats.db" \
+  --name trips-redirect \
+  trips-redirect
+```
+
 ## Contributing
 
 Contributions are welcome! If you have any ideas, suggestions, or bug reports, please open an issue or submit a pull request.
