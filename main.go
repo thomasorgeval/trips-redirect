@@ -1,7 +1,7 @@
 package main
 
 import (
-	"database/sql"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"gopkg.in/yaml.v3"
@@ -10,10 +10,9 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 const API_URL = "https://api.polarsteps.com"
@@ -22,7 +21,6 @@ var cache = struct {
 	sync.RWMutex
 	store map[string]string
 }{store: make(map[string]string)}
-
 
 type Config struct {
 	Domains map[string]string `yaml:"domains"`
@@ -35,11 +33,6 @@ type Trip struct {
 	EndDate   *int64 `json:"end_date"`
 }
 
-type GeoLocation struct {
-	Country string `json:"country"`
-	City    string `json:"city"`
-}
-
 // Structure flexible pour gérer différents formats de réponse API
 type ApiResponse struct {
 	AllTrips []Trip `json:"alltrips,omitempty"`
@@ -47,22 +40,45 @@ type ApiResponse struct {
 	Data     []Trip `json:"data,omitempty"`
 }
 
+// Rybbit Analytics structures
+type EventType string
+
+const (
+	EventPageview    EventType = "pageview"
+	EventCustom      EventType = "custom_event"
+	EventPerformance EventType = "performance"
+	EventOutbound    EventType = "outbound"
+	EventError       EventType = "error"
+)
+
+type RybbitEvent struct {
+	Type         EventType `json:"type"`
+	SiteID       string    `json:"site_id,omitempty"`
+	Pathname     string    `json:"pathname,omitempty"`
+	Hostname     string    `json:"hostname,omitempty"`
+	PageTitle    string    `json:"page_title,omitempty"`
+	Referrer     string    `json:"referrer,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
+	UserAgent    string    `json:"user_agent,omitempty"`
+	IPAddress    string    `json:"ip_address,omitempty"`
+	QueryString  string    `json:"querystring,omitempty"`
+	Language     string    `json:"language,omitempty"`
+	ScreenWidth  int       `json:"screenWidth,omitempty"`
+	ScreenHeight int       `json:"screenHeight,omitempty"`
+}
+
+type RybbitConfig struct {
+	APIKey  string
+	APIURL  string
+	SiteID  string
+	Enabled bool
+}
+
 var cfg Config
-var db *sql.DB
+var rybbitCfg RybbitConfig
+var rybbitClient = &http.Client{Timeout: 5 * time.Second}
 
 func main() {
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "stats.db"
-	}
-
-	var err error
-	db, err = initDB(dbPath)
-	if err != nil {
-		log.Fatal("❌ Cannot initialize database:", err)
-	}
-	defer db.Close()
-
 	yamlFile, err := os.ReadFile("domains.yaml")
 	if err != nil {
 		log.Fatal("❌ Cannot read domains.yaml:", err)
@@ -72,10 +88,10 @@ func main() {
 		log.Fatal("❌ Cannot parse domains.yaml:", err)
 	}
 
-	go startCacheResetter()
+	// Initialize Rybbit configuration
+	initRybbitConfig()
 
 	http.HandleFunc("/", handler)
-	http.HandleFunc("/stats", statsHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -83,31 +99,65 @@ func main() {
 	}
 
 	log.Printf("🚀 Redirector running on :%s\n", port)
+	if rybbitCfg.Enabled {
+		log.Printf("📊 Rybbit Analytics enabled (Site ID: %s)\n", rybbitCfg.SiteID)
+	}
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-func initDB(filepath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", filepath)
-	if err != nil {
-		return nil, err
+// Initialize Rybbit configuration from environment variables
+func initRybbitConfig() {
+	rybbitCfg.APIKey = os.Getenv("RYBBIT_API_KEY")
+	rybbitCfg.APIURL = os.Getenv("RYBBIT_API_URL")
+	rybbitCfg.SiteID = os.Getenv("RYBBIT_SITE_ID")
+
+	// Enable Rybbit only if all required variables are set
+	rybbitCfg.Enabled = rybbitCfg.APIKey != "" && rybbitCfg.APIURL != "" && rybbitCfg.SiteID != ""
+
+	if !rybbitCfg.Enabled && (rybbitCfg.APIKey != "" || rybbitCfg.APIURL != "" || rybbitCfg.SiteID != "") {
+		log.Println("⚠️ Rybbit Analytics partially configured - analytics disabled. Ensure RYBBIT_API_KEY, RYBBIT_API_URL, and RYBBIT_SITE_ID are all set.")
+	}
+}
+
+// Send event to Rybbit Analytics
+func sendRybbitEvent(event RybbitEvent) {
+	if !rybbitCfg.Enabled {
+		return
 	}
 
-	createTableSQL := `
-	CREATE TABLE IF NOT EXISTS visits (
-		"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-		"url" TEXT,
-		"timestamp" DATETIME,
-		"country" TEXT,
-		"city" TEXT
-	);`
-
-	_, err = db.Exec(createTableSQL)
-	if err != nil {
-		return nil, err
+	// Set default site_id if not provided
+	if event.SiteID == "" {
+		event.SiteID = rybbitCfg.SiteID
 	}
 
-	log.Println("✅ Database initialized and table created.")
-	return db, nil
+	// Send event asynchronously to avoid blocking the response
+	go func() {
+		payload, err := json.Marshal(event)
+		if err != nil {
+			log.Printf("⚠️ Failed to marshal Rybbit event: %v", err)
+			return
+		}
+
+		req, err := http.NewRequest("POST", rybbitCfg.APIURL, bytes.NewBuffer(payload))
+		if err != nil {
+			log.Printf("⚠️ Failed to create Rybbit request: %v", err)
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+rybbitCfg.APIKey)
+
+		resp, err := rybbitClient.Do(req)
+		if err != nil {
+			log.Printf("⚠️ Failed to send Rybbit event: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
+			log.Printf("⚠️ Rybbit API returned status %d", resp.StatusCode)
+		}
+	}()
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +171,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
 	}
 
+	// Supprimer le préfixe www. si présent
 	if len(host) > 4 && host[:4] == "www." {
 		host = host[4:]
 	}
@@ -128,6 +179,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	username, ok := cfg.Domains[host]
 	if !ok {
 		log.Printf("❌ Unknown host: %s", host)
+
+		// Track 404 error
+		sendRybbitEvent(RybbitEvent{
+			Type:      EventError,
+			Hostname:  host,
+			Pathname:  r.URL.Path,
+			UserAgent: r.Header.Get("User-Agent"),
+			IPAddress: getClientIP(r),
+			Referrer:  r.Header.Get("Referer"),
+		})
+
 		http.NotFound(w, r)
 		return
 	}
@@ -140,26 +202,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		ip = realIP
 	}
 
-	geo, err := getGeoLocation(ip)
-	if err != nil {
-		log.Printf("⚠️ Could not get geolocation for IP %s: %v", ip, err)
-	}
-
-	go func() {
-		country, city := "unknown", "unknown"
-		if geo != nil {
-			country = geo.Country
-			city = geo.City
-			log.Printf("🌍 Request from host=%s → username=%s, location=%s, %s", host, username, city, country)
-		} else {
-			log.Printf("🌍 Request from host=%s → username=%s", host, username)
-		}
-
-		_, err := db.Exec("INSERT INTO visits (url, timestamp, country, city) VALUES (?, ?, ?, ?)", host, time.Now(), country, city)
-		if err != nil {
-			log.Printf("⚠️ Failed to record visit for %s: %v", host, err)
-		}
-	}()
+	log.Printf("🌍 Request from host=%s → username=%s, IP=%s", host, username, ip)
 
 	cache.RLock()
 	cachedURL, found := cache.store[host]
@@ -176,12 +219,36 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	trips, err := fetchUserTrips(username)
 	if err != nil {
 		log.Printf("⚠️ Failed to fetch trips for %s: %v", username, err)
+
+		// Track API error
+		sendRybbitEvent(RybbitEvent{
+			Type:      EventError,
+			Hostname:  host,
+			Pathname:  r.URL.Path,
+			UserAgent: r.Header.Get("User-Agent"),
+			IPAddress: getClientIP(r),
+			Referrer:  r.Header.Get("Referer"),
+			UserID:    username,
+		})
+
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
 		return
 	}
 
 	if len(trips) == 0 {
 		log.Printf("↩️ No trips found for %s → redirect to profile", username)
+
+		// Track redirect to profile
+		sendRybbitEvent(RybbitEvent{
+			Type:      EventPageview,
+			Hostname:  host,
+			Pathname:  r.URL.Path,
+			UserAgent: r.Header.Get("User-Agent"),
+			IPAddress: getClientIP(r),
+			Referrer:  r.Header.Get("Referer"),
+			UserID:    username,
+		})
+
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
 		return
 	}
@@ -189,6 +256,18 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	selectedTrip := selectTrip(trips)
 	if selectedTrip == nil {
 		log.Printf("↩️ No suitable trip found for %s → redirect to profile", username)
+
+		// Track redirect to profile
+		sendRybbitEvent(RybbitEvent{
+			Type:      EventPageview,
+			Hostname:  host,
+			Pathname:  r.URL.Path,
+			UserAgent: r.Header.Get("User-Agent"),
+			IPAddress: getClientIP(r),
+			Referrer:  r.Header.Get("Referer"),
+			UserID:    username,
+		})
+
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
 		return
 	}
@@ -200,96 +279,48 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	cache.Unlock()
 
 	log.Printf("➡️ Redirecting %s → %s", username, target)
+
+	// Track successful redirect as outbound link
+	sendRybbitEvent(RybbitEvent{
+		Type:      EventOutbound,
+		Hostname:  host,
+		Pathname:  r.URL.Path,
+		PageTitle: fmt.Sprintf("Trip: %s", selectedTrip.Slug),
+		UserAgent: r.Header.Get("User-Agent"),
+		IPAddress: getClientIP(r),
+		Referrer:  r.Header.Get("Referer"),
+		UserID:    username,
+	})
+
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
-func getGeoLocation(ip string) (*GeoLocation, error) {
-	if ip == "" || ip == "::1" || ip == "127.0.0.1" {
-		return &GeoLocation{Country: "local", City: "localhost"}, nil
-	}
-
-	resp, err := http.Get("http://ip-api.com/json/" + ip)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var geo GeoLocation
-	if err := json.NewDecoder(resp.Body).Decode(&geo); err != nil {
-		return nil, err
-	}
-	return &geo, nil
-}
-
-func statsHandler(w http.ResponseWriter, r *http.Request) {
-	type CountryStats struct {
-		Total   int            `json:"total"`
-		Details map[string]int `json:"countries"`
-	}
-
-	type StatsResponse struct {
-		TotalVisits  int                       `json:"total_visits"`
-		VisitsByUrl  map[string]CountryStats   `json:"visits_by_url"`
-		UniqueUsers  int                       `json:"unique_users_today"`
-	}
-
-	rows, err := db.Query("SELECT url, country FROM visits")
-	if err != nil {
-		http.Error(w, "Failed to query stats", http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	stats := make(map[string]map[string]int)
-	totalVisits := 0
-	for rows.Next() {
-		var url, country string
-		if err := rows.Scan(&url, &country); err != nil {
-			log.Printf("⚠️ Error scanning row: %v", err)
-			continue
+// Get client IP address from request
+func getClientIP(r *http.Request) string {
+	// Try X-Forwarded-For header first (for proxies/load balancers)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For can contain multiple IPs, take the first one
+		if idx := strings.Index(xff, ","); idx > 0 {
+			return strings.TrimSpace(xff[:idx])
 		}
-		totalVisits++
-		if _, ok := stats[url]; !ok {
-			stats[url] = make(map[string]int)
-		}
-		stats[url][country]++
+		return strings.TrimSpace(xff)
 	}
 
-	visitsByUrl := make(map[string]CountryStats)
-	for url, countryCounts := range stats {
-		total := 0
-		for _, count := range countryCounts {
-			total += count
-		}
-		visitsByUrl[url] = CountryStats{
-			Total:   total,
-			Details: countryCounts,
-		}
+	// Try X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
 	}
 
-	// Compter les visiteurs uniques pour la journée en cours
-	var uniqueUsersToday int
-	err = db.QueryRow("SELECT COUNT(DISTINCT city) FROM visits WHERE date(timestamp) = date('now')").Scan(&uniqueUsersToday)
-	if err != nil {
-		log.Printf("⚠️ Failed to query unique users: %v", err)
+	// Fall back to RemoteAddr (strip port if present)
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
 	}
-
-	response := StatsResponse{
-		TotalVisits: totalVisits,
-		VisitsByUrl: visitsByUrl,
-		UniqueUsers: uniqueUsersToday,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding stats: %v", err)
-		http.Error(w, "Error encoding stats", http.StatusInternalServerError)
-	}
+	return r.RemoteAddr
 }
 
 func fetchUserTrips(username string) ([]Trip, error) {
 	url := fmt.Sprintf("%s/users/byusername/%s", API_URL, username)
-	
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
@@ -386,23 +417,4 @@ func getKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
-}
-
-func startCacheResetter() {
-	log.Println("🕒 Daily cache reset scheduled.")
-	go func() {
-		for {
-			now := time.Now()
-			nextMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(24 * time.Hour)
-			durationUntilMidnight := nextMidnight.Sub(now)
-
-			time.Sleep(durationUntilMidnight)
-
-			cache.Lock()
-			cache.store = make(map[string]string)
-			cache.Unlock()
-			log.Println("✅ Cache has been reset at midnight.")
-			time.Sleep(60 * time.Second)
-		}
-	}()
 }

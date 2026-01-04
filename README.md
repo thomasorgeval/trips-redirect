@@ -46,23 +46,37 @@ The service will automatically handle `www.` subdomains. For example, if you con
 
     This will start the service on port 3000.
 
-### Data Persistence
+### Environment Variables
 
-The visit statistics are stored in a SQLite database file. To ensure that your statistics are not lost when you update or restart the Docker container, you should store the database file on your host machine using a Docker volume.
+The following environment variables can be configured:
 
-You can specify the path for the database file inside the container by using the `DB_PATH` environment variable.
+*   `PORT` - The port to run the service on (default: 3000)
 
-Here is an example of how to run the service with a persistent database stored in `/path/to/data/stats.db` on your host machine:
+#### Rybbit Analytics (Optional)
+
+The service supports [Rybbit Analytics](https://rybbit.io) for tracking redirections and errors. To enable analytics, set the following environment variables:
+
+*   `RYBBIT_API_KEY` - Your Rybbit API key
+*   `RYBBIT_API_URL` - The Rybbit API endpoint URL
+*   `RYBBIT_SITE_ID` - Your Rybbit site ID
+
+All three variables must be set to enable analytics. If any variable is missing, analytics will be disabled.
+
+**Example with analytics enabled:**
 
 ```bash
-docker run -d \
-  -p 3000:3000 \
+docker run -d -p 3000:3000 \
   -v $(pwd)/domains.yaml:/domains.yaml \
-  -v /path/to/data:/data \
-  -e DB_PATH="/data/stats.db" \
-  --name trips-redirect \
-  trips-redirect
+  -e RYBBIT_API_KEY=your-api-key \
+  -e RYBBIT_API_URL=https://api.rybbit.io/events \
+  -e RYBBIT_SITE_ID=your-site-id \
+  --name trips-redirect trips-redirect
 ```
+
+The service tracks the following events:
+- **Pageview**: Successful redirections and profile fallbacks
+- **Outbound**: Redirects to Polarsteps trip pages
+- **Error**: 404 errors and API failures
 
 ## Contributing
 
