@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 const API_URL = "https://api.polarsteps.com"
@@ -81,18 +79,6 @@ var rybbitCfg RybbitConfig
 var rybbitClient = &http.Client{Timeout: 5 * time.Second}
 
 func main() {
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "stats.db"
-	}
-
-	var err error
-	db, err = initDB(dbPath)
-	if err != nil {
-		log.Fatal("❌ Cannot initialize database:", err)
-	}
-	defer db.Close()
-
 	yamlFile, err := os.ReadFile("domains.yaml")
 	if err != nil {
 		log.Fatal("❌ Cannot read domains.yaml:", err)
@@ -216,26 +202,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		ip = realIP
 	}
 
-	geo, err := getGeoLocation(ip)
-	if err != nil {
-		log.Printf("⚠️ Could not get geolocation for IP %s: %v", ip, err)
-	}
-
-	go func() {
-		country, city := "unknown", "unknown"
-		if geo != nil {
-			country = geo.Country
-			city = geo.City
-			log.Printf("🌍 Request from host=%s → username=%s, location=%s, %s", host, username, city, country)
-		} else {
-			log.Printf("🌍 Request from host=%s → username=%s", host, username)
-		}
-
-		_, err := db.Exec("INSERT INTO visits (url, timestamp, country, city) VALUES (?, ?, ?, ?)", host, time.Now(), country, city)
-		if err != nil {
-			log.Printf("⚠️ Failed to record visit for %s: %v", host, err)
-		}
-	}()
+	log.Printf("🌍 Request from host=%s → username=%s, IP=%s", host, username, ip)
 
 	cache.RLock()
 	cachedURL, found := cache.store[host]
