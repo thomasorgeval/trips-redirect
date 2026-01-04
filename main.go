@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"gopkg.in/yaml.v3"
@@ -18,10 +19,10 @@ type Config struct {
 }
 
 type Trip struct {
-	ID        int     `json:"id"`
-	Slug      string  `json:"slug"`
-	StartDate int64   `json:"start_date"`
-	EndDate   *int64  `json:"end_date"`
+	ID        int    `json:"id"`
+	Slug      string `json:"slug"`
+	StartDate int64  `json:"start_date"`
+	EndDate   *int64 `json:"end_date"`
 }
 
 // Structure flexible pour gérer différents formats de réponse API
@@ -31,27 +32,124 @@ type ApiResponse struct {
 	Data     []Trip `json:"data,omitempty"`
 }
 
+// Rybbit Analytics structures
+type EventType string
+
+const (
+	EventPageview    EventType = "pageview"
+	EventCustom      EventType = "custom_event"
+	EventPerformance EventType = "performance"
+	EventOutbound    EventType = "outbound"
+	EventError       EventType = "error"
+)
+
+type RybbitEvent struct {
+	Type         EventType `json:"type"`
+	SiteID       string    `json:"site_id,omitempty"`
+	Pathname     string    `json:"pathname,omitempty"`
+	Hostname     string    `json:"hostname,omitempty"`
+	PageTitle    string    `json:"page_title,omitempty"`
+	Referrer     string    `json:"referrer,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
+	UserAgent    string    `json:"user_agent,omitempty"`
+	IPAddress    string    `json:"ip_address,omitempty"`
+	QueryString  string    `json:"querystring,omitempty"`
+	Language     string    `json:"language,omitempty"`
+	ScreenWidth  int       `json:"screenWidth,omitempty"`
+	ScreenHeight int       `json:"screenHeight,omitempty"`
+}
+
+type RybbitConfig struct {
+	APIKey  string
+	APIURL  string
+	SiteID  string
+	Enabled bool
+}
+
 var cfg Config
+var rybbitCfg RybbitConfig
 
 func main() {
 	yamlFile, err := os.ReadFile("domains.yaml")
 	if err != nil {
 		log.Fatal("❌ Cannot read domains.yaml:", err)
 	}
-	
+
 	if err := yaml.Unmarshal(yamlFile, &cfg); err != nil {
 		log.Fatal("❌ Cannot parse domains.yaml:", err)
 	}
 
+	// Initialize Rybbit configuration
+	initRybbitConfig()
+
 	http.HandleFunc("/", handler)
-	
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "3000"
 	}
-	
+
 	log.Printf("🚀 Redirector running on :%s\n", port)
+	if rybbitCfg.Enabled {
+		log.Printf("📊 Rybbit Analytics enabled (Site ID: %s)\n", rybbitCfg.SiteID)
+	}
 	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+
+// Initialize Rybbit configuration from environment variables
+func initRybbitConfig() {
+	rybbitCfg.APIKey = os.Getenv("RYBBIT_API_KEY")
+	rybbitCfg.APIURL = os.Getenv("RYBBIT_API_URL")
+	rybbitCfg.SiteID = os.Getenv("RYBBIT_SITE_ID")
+
+	// Enable Rybbit only if all required variables are set
+	rybbitCfg.Enabled = rybbitCfg.APIKey != "" && rybbitCfg.APIURL != "" && rybbitCfg.SiteID != ""
+
+	if !rybbitCfg.Enabled && (rybbitCfg.APIKey != "" || rybbitCfg.APIURL != "" || rybbitCfg.SiteID != "") {
+		log.Println("⚠️ Rybbit Analytics partially configured - analytics disabled. Ensure RYBBIT_API_KEY, RYBBIT_API_URL, and RYBBIT_SITE_ID are all set.")
+	}
+}
+
+// Send event to Rybbit Analytics
+func sendRybbitEvent(event RybbitEvent) {
+	if !rybbitCfg.Enabled {
+		return
+	}
+
+	// Set default site_id if not provided
+	if event.SiteID == "" {
+		event.SiteID = rybbitCfg.SiteID
+	}
+
+	// Send event asynchronously to avoid blocking the response
+	go func() {
+		payload, err := json.Marshal(event)
+		if err != nil {
+			log.Printf("⚠️ Failed to marshal Rybbit event: %v", err)
+			return
+		}
+
+		req, err := http.NewRequest("POST", rybbitCfg.APIURL, bytes.NewBuffer(payload))
+		if err != nil {
+			log.Printf("⚠️ Failed to create Rybbit request: %v", err)
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+rybbitCfg.APIKey)
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("⚠️ Failed to send Rybbit event: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
+			log.Printf("⚠️ Rybbit API returned status %d", resp.StatusCode)
+		}
+	}()
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +157,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = r.Host
 	}
-	
+
 	// Supprimer le préfixe www. si présent
 	if len(host) > 4 && host[:4] == "www." {
 		host = host[4:]
@@ -68,6 +166,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	username, ok := cfg.Domains[host]
 	if !ok {
 		log.Printf("❌ Unknown host: %s", host)
+
+		// Track 404 error
+		sendRybbitEvent(RybbitEvent{
+			Type:      EventError,
+			Hostname:  host,
+			Pathname:  r.URL.Path,
+			UserAgent: r.Header.Get("User-Agent"),
+			IPAddress: getClientIP(r),
+			Referrer:  r.Header.Get("Referer"),
+		})
+
 		http.NotFound(w, r)
 		return
 	}
@@ -78,12 +187,36 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	trips, err := fetchUserTrips(username)
 	if err != nil {
 		log.Printf("⚠️ Failed to fetch trips for %s: %v", username, err)
+
+		// Track API error
+		sendRybbitEvent(RybbitEvent{
+			Type:      EventError,
+			Hostname:  host,
+			Pathname:  r.URL.Path,
+			UserAgent: r.Header.Get("User-Agent"),
+			IPAddress: getClientIP(r),
+			Referrer:  r.Header.Get("Referer"),
+			UserID:    username,
+		})
+
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
 		return
 	}
 
 	if len(trips) == 0 {
 		log.Printf("↩️ No trips found for %s → redirect to profile", username)
+
+		// Track redirect to profile
+		sendRybbitEvent(RybbitEvent{
+			Type:      EventPageview,
+			Hostname:  host,
+			Pathname:  r.URL.Path,
+			UserAgent: r.Header.Get("User-Agent"),
+			IPAddress: getClientIP(r),
+			Referrer:  r.Header.Get("Referer"),
+			UserID:    username,
+		})
+
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
 		return
 	}
@@ -92,18 +225,63 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	selectedTrip := selectTrip(trips)
 	if selectedTrip == nil {
 		log.Printf("↩️ No suitable trip found for %s → redirect to profile", username)
+
+		// Track redirect to profile
+		sendRybbitEvent(RybbitEvent{
+			Type:      EventPageview,
+			Hostname:  host,
+			Pathname:  r.URL.Path,
+			UserAgent: r.Header.Get("User-Agent"),
+			IPAddress: getClientIP(r),
+			Referrer:  r.Header.Get("Referer"),
+			UserID:    username,
+		})
+
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
 		return
 	}
 
 	target := fmt.Sprintf("https://polarsteps.com/%s/%d-%s", username, selectedTrip.ID, selectedTrip.Slug)
 	log.Printf("➡️ Redirecting %s → %s", username, target)
+
+	// Track successful redirect as outbound link
+	sendRybbitEvent(RybbitEvent{
+		Type:      EventOutbound,
+		Hostname:  host,
+		Pathname:  r.URL.Path,
+		PageTitle: fmt.Sprintf("Trip: %s", selectedTrip.Slug),
+		UserAgent: r.Header.Get("User-Agent"),
+		IPAddress: getClientIP(r),
+		Referrer:  r.Header.Get("Referer"),
+		UserID:    username,
+	})
+
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// Get client IP address from request
+func getClientIP(r *http.Request) string {
+	// Try X-Forwarded-For header first (for proxies/load balancers)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For can contain multiple IPs, take the first one
+		if idx := bytes.IndexByte([]byte(xff), ','); idx > 0 {
+			return xff[:idx]
+		}
+		return xff
+	}
+
+	// Try X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+
+	// Fall back to RemoteAddr
+	return r.RemoteAddr
 }
 
 func fetchUserTrips(username string) ([]Trip, error) {
 	url := fmt.Sprintf("%s/users/byusername/%s", API_URL, username)
-	
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
