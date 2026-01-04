@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +23,6 @@ var cache = struct {
 	sync.RWMutex
 	store map[string]string
 }{store: make(map[string]string)}
-
 
 type Config struct {
 	Domains map[string]string `yaml:"domains"`
@@ -78,6 +78,7 @@ type RybbitConfig struct {
 
 var cfg Config
 var rybbitCfg RybbitConfig
+var rybbitClient = &http.Client{Timeout: 5 * time.Second}
 
 func main() {
 	dbPath := os.Getenv("DB_PATH")
@@ -160,8 +161,7 @@ func sendRybbitEvent(event RybbitEvent) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+rybbitCfg.APIKey)
 
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Do(req)
+		resp, err := rybbitClient.Do(req)
 		if err != nil {
 			log.Printf("⚠️ Failed to send Rybbit event: %v", err)
 			return
@@ -333,10 +333,10 @@ func getClientIP(r *http.Request) string {
 	// Try X-Forwarded-For header first (for proxies/load balancers)
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// X-Forwarded-For can contain multiple IPs, take the first one
-		if idx := bytes.IndexByte([]byte(xff), ','); idx > 0 {
-			return xff[:idx]
+		if idx := strings.Index(xff, ","); idx > 0 {
+			return strings.TrimSpace(xff[:idx])
 		}
-		return xff
+		return strings.TrimSpace(xff)
 	}
 
 	// Try X-Real-IP header
@@ -344,7 +344,10 @@ func getClientIP(r *http.Request) string {
 		return xri
 	}
 
-	// Fall back to RemoteAddr
+	// Fall back to RemoteAddr (strip port if present)
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
 	return r.RemoteAddr
 }
 
