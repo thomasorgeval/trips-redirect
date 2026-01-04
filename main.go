@@ -58,13 +58,13 @@ type RybbitEvent struct {
 	Hostname     string    `json:"hostname,omitempty"`
 	PageTitle    string    `json:"page_title,omitempty"`
 	Referrer     string    `json:"referrer,omitempty"`
-	UserID       string    `json:"user_id,omitempty"`
 	UserAgent    string    `json:"user_agent,omitempty"`
 	IPAddress    string    `json:"ip_address,omitempty"`
 	QueryString  string    `json:"querystring,omitempty"`
 	Language     string    `json:"language,omitempty"`
 	ScreenWidth  int       `json:"screenWidth,omitempty"`
 	ScreenHeight int       `json:"screenHeight,omitempty"`
+	Properties   string    `json:"properties"` // Required field (can be empty string or JSON object as string)
 }
 
 type RybbitConfig struct {
@@ -128,6 +128,11 @@ func sendRybbitEvent(event RybbitEvent) {
 	// Set default site_id if not provided
 	if event.SiteID == "" {
 		event.SiteID = rybbitCfg.SiteID
+	}
+
+	// Set default properties if not provided (required field)
+	if event.Properties == "" {
+		event.Properties = "{}"
 	}
 
 	// Send event asynchronously to avoid blocking the response
@@ -234,7 +239,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			UserAgent: r.Header.Get("User-Agent"),
 			IPAddress: getClientIP(r),
 			Referrer:  r.Header.Get("Referer"),
-			UserID:    username,
 		})
 
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
@@ -252,7 +256,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			UserAgent: r.Header.Get("User-Agent"),
 			IPAddress: getClientIP(r),
 			Referrer:  r.Header.Get("Referer"),
-			UserID:    username,
 		})
 
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
@@ -271,7 +274,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			UserAgent: r.Header.Get("User-Agent"),
 			IPAddress: getClientIP(r),
 			Referrer:  r.Header.Get("Referer"),
-			UserID:    username,
 		})
 
 		http.Redirect(w, r, "https://polarsteps.com/"+username, http.StatusFound)
@@ -295,7 +297,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		UserAgent: r.Header.Get("User-Agent"),
 		IPAddress: getClientIP(r),
 		Referrer:  r.Header.Get("Referer"),
-		UserID:    username,
 	})
 
 	http.Redirect(w, r, target, http.StatusFound)
