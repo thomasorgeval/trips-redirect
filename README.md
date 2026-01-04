@@ -1,6 +1,6 @@
 # Trips Redirect
 
-![Docker Image Size](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/thomasorgeval/trips-redirect/main/docker-size.json)
+![Docker Image Size](https://img.shields.io/badge/Docker%20Image-11.5%20MB-blue)
 ![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)
 
 A simple and intelligent redirector for your Polarsteps trips. This service allows you to use a custom domain to automatically redirect to your latest Polarsteps trip.
@@ -88,3 +88,9 @@ Here are some ways you can contribute:
 *   Add new features.
 *   Fix bugs.
 *   Suggest new ideas.
+
+## Size of the image
+
+```bash
+docker manifest inspect ghcr.io/thomasorgeval/trips-redirect --verbose | jq '.[0].OCIManifest.layers[].size' | awk '{sum += $1} END {print "Total compressed size: " sum " bytes (" sum/1024/1024 " MB)"}'
+```

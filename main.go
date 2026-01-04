@@ -6,13 +6,23 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sort"
+	"sync"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const API_URL = "https://api.polarsteps.com"
+
+var cache = struct {
+	sync.RWMutex
+	store map[string]string
+}{store: make(map[string]string)}
+
 
 type Config struct {
 	Domains map[string]string `yaml:"domains"`
@@ -70,6 +80,18 @@ var cfg Config
 var rybbitCfg RybbitConfig
 
 func main() {
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "stats.db"
+	}
+
+	var err error
+	db, err = initDB(dbPath)
+	if err != nil {
+		log.Fatal("❌ Cannot initialize database:", err)
+	}
+	defer db.Close()
+
 	yamlFile, err := os.ReadFile("domains.yaml")
 	if err != nil {
 		log.Fatal("❌ Cannot read domains.yaml:", err)
@@ -153,6 +175,11 @@ func sendRybbitEvent(event RybbitEvent) {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
 	host := r.Header.Get("X-Forwarded-Host")
 	if host == "" {
 		host = r.Host
@@ -181,9 +208,47 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("🌍 Request from host=%s → username=%s", host, username)
+	ip := r.Header.Get("X-Forwarded-For")
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	if realIP, _, err := net.SplitHostPort(ip); err == nil {
+		ip = realIP
+	}
 
-	// Récupérer les voyages de l'utilisateur
+	geo, err := getGeoLocation(ip)
+	if err != nil {
+		log.Printf("⚠️ Could not get geolocation for IP %s: %v", ip, err)
+	}
+
+	go func() {
+		country, city := "unknown", "unknown"
+		if geo != nil {
+			country = geo.Country
+			city = geo.City
+			log.Printf("🌍 Request from host=%s → username=%s, location=%s, %s", host, username, city, country)
+		} else {
+			log.Printf("🌍 Request from host=%s → username=%s", host, username)
+		}
+
+		_, err := db.Exec("INSERT INTO visits (url, timestamp, country, city) VALUES (?, ?, ?, ?)", host, time.Now(), country, city)
+		if err != nil {
+			log.Printf("⚠️ Failed to record visit for %s: %v", host, err)
+		}
+	}()
+
+	cache.RLock()
+	cachedURL, found := cache.store[host]
+	cache.RUnlock()
+
+	if found {
+		log.Printf("✅ Cache hit for %s → %s", host, cachedURL)
+		http.Redirect(w, r, cachedURL, http.StatusFound)
+		return
+	}
+
+	log.Printf("❌ Cache miss for %s", host)
+
 	trips, err := fetchUserTrips(username)
 	if err != nil {
 		log.Printf("⚠️ Failed to fetch trips for %s: %v", username, err)
@@ -221,7 +286,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sélectionner le voyage approprié
 	selectedTrip := selectTrip(trips)
 	if selectedTrip == nil {
 		log.Printf("↩️ No suitable trip found for %s → redirect to profile", username)
@@ -242,6 +306,11 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := fmt.Sprintf("https://polarsteps.com/%s/%d-%s", username, selectedTrip.ID, selectedTrip.Slug)
+
+	cache.Lock()
+	cache.store[host] = target
+	cache.Unlock()
+
 	log.Printf("➡️ Redirecting %s → %s", username, target)
 
 	// Track successful redirect as outbound link
