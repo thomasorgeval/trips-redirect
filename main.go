@@ -143,9 +143,6 @@ func sendRybbitEvent(event RybbitEvent) {
 			return
 		}
 
-		// Log payload for debugging
-		log.Printf("🔍 Sending Rybbit event: %s", string(payload))
-
 		req, err := http.NewRequest("POST", rybbitCfg.APIURL, bytes.NewBuffer(payload))
 		if err != nil {
 			log.Printf("⚠️ Failed to create Rybbit request: %v", err)
@@ -163,10 +160,7 @@ func sendRybbitEvent(event RybbitEvent) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-			// Read response body for debugging
-			bodyBytes := make([]byte, 1024)
-			n, _ := resp.Body.Read(bodyBytes)
-			log.Printf("⚠️ Rybbit API returned status %d - Response: %s", resp.StatusCode, string(bodyBytes[:n]))
+			log.Printf("⚠️ Rybbit API returned status %d", resp.StatusCode)
 		}
 	}()
 }
@@ -221,6 +215,18 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	if found {
 		log.Printf("✅ Cache hit for %s → %s", host, cachedURL)
+
+		// Track cache hit redirect
+		sendRybbitEvent(RybbitEvent{
+			Type:       EventOutbound,
+			Hostname:   host,
+			Pathname:   r.URL.Path,
+			UserAgent:  r.Header.Get("User-Agent"),
+			IPAddress:  getClientIP(r),
+			Referrer:   r.Header.Get("Referer"),
+			Properties: fmt.Sprintf(`{"url":"%s"}`, cachedURL),
+		})
+
 		http.Redirect(w, r, cachedURL, http.StatusFound)
 		return
 	}
