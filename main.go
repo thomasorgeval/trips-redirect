@@ -52,8 +52,8 @@ const (
 )
 
 type RybbitEvent struct {
-	Type         EventType `json:"type"`
-	SiteID       string    `json:"site_id,omitempty"`
+	SiteID       string    `json:"site_id"` // Required field
+	Type         EventType `json:"type,omitempty"`
 	Pathname     string    `json:"pathname,omitempty"`
 	Hostname     string    `json:"hostname,omitempty"`
 	PageTitle    string    `json:"page_title,omitempty"`
@@ -138,6 +138,9 @@ func sendRybbitEvent(event RybbitEvent) {
 			return
 		}
 
+		// Log payload for debugging
+		log.Printf("🔍 Sending Rybbit event: %s", string(payload))
+
 		req, err := http.NewRequest("POST", rybbitCfg.APIURL, bytes.NewBuffer(payload))
 		if err != nil {
 			log.Printf("⚠️ Failed to create Rybbit request: %v", err)
@@ -155,7 +158,10 @@ func sendRybbitEvent(event RybbitEvent) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
-			log.Printf("⚠️ Rybbit API returned status %d", resp.StatusCode)
+			// Read response body for debugging
+			bodyBytes := make([]byte, 1024)
+			n, _ := resp.Body.Read(bodyBytes)
+			log.Printf("⚠️ Rybbit API returned status %d - Response: %s", resp.StatusCode, string(bodyBytes[:n]))
 		}
 	}()
 }
