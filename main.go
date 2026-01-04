@@ -290,13 +290,14 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	// Track successful redirect as outbound link
 	sendRybbitEvent(RybbitEvent{
-		Type:      EventOutbound,
-		Hostname:  host,
-		Pathname:  r.URL.Path,
-		PageTitle: fmt.Sprintf("Trip: %s", selectedTrip.Slug),
-		UserAgent: r.Header.Get("User-Agent"),
-		IPAddress: getClientIP(r),
-		Referrer:  r.Header.Get("Referer"),
+		Type:       EventOutbound,
+		Hostname:   host,
+		Pathname:   r.URL.Path,
+		PageTitle:  fmt.Sprintf("Trip: %s", selectedTrip.Slug),
+		UserAgent:  r.Header.Get("User-Agent"),
+		IPAddress:  getClientIP(r),
+		Referrer:   r.Header.Get("Referer"),
+		Properties: fmt.Sprintf(`{"url":"%s","text":"Trip: %s"}`, target, selectedTrip.Slug),
 	})
 
 	http.Redirect(w, r, target, http.StatusFound)
